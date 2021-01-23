@@ -21,154 +21,161 @@ namespace IngameScript
 {
     partial class Program : MyGridProgram
     {
-        // This file contains your actual script.
-        //
-        // You can either keep all your code here, or you can create separate
-        // code files to make your program easier to navigate while coding.
-        //
-        // In order to add a new utility class, right-click on your project,
-        // select 'New' then 'Add Item...'. Now find the 'Space Engineers'
-        // category under 'Visual C# Items' on the left hand side, and select
-        // 'Utility Class' in the main area. Name it in the box below, and
-        // press OK. This utility class will be merged in with your code when
-        // deploying your final script.
-        //
-        // You can also simply create a new utility class manually, you don't
-        // have to use the template if you don't want to. Just do so the first
-        // time to see what a utility class looks like.
-        //
-        // Go to:
-        // https://github.com/malware-dev/MDK-SE/wiki/Quick-Introduction-to-Space-Engineers-Ingame-Scripts
-        //
-        // to learn more about ingame scripts.
-
-        // const string destContainerName = "Sorted belly";
-
-        // private IMyCargoContainer destContainer;
-        // private IMyInventory dest;
         // temp vars
         private List<IMyTerminalBlock> tempBlocks = new List<IMyTerminalBlock>();
         private List<IMyAssembler> tempAssemblers = new List<IMyAssembler>();
         private List<MyInventoryItem> tempItems = new List<MyInventoryItem>();
         private List<MyProductionItem> tempQueueItems = new List<MyProductionItem>();
 
-        // private StringBuilder dynamicContent = new StringBuilder();
-        // private StringBuilder asmworking = new StringBuilder();
-
         private List<IMyCargoContainer> sortedContainers = new List<IMyCargoContainer>();
         public void FindSortedContainers()
         {
+            // Echo("dbg: FindSortedContainers()");
             sortedContainers.Clear();
             GridTerminalSystem.GetBlocksOfType(
-                sortedContainers, block => block.CustomName.StartsWith("store"));
+                sortedContainers, block => block.IsWorking && block.CustomName.StartsWith("store"));
+            // sortedContainers.ForEach(s => Echo($"dbg: Found store: '{s.CustomName}'"));
         }
 
         private List<IMyTerminalBlock> sourceContainers = new List<IMyTerminalBlock>();
         public void FindSourceContainers()
         {
-            // GridTerminalSystem.SearchBlocksOfName("belly", lst, block => block.CustomName != destContainerName);
+            // Echo("dbg: FindSourceContainers()");
             sourceContainers.Clear();
             GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(sourceContainers, block =>
             {
                 if (!block.HasInventory)
                     return false;
-                if (block.GetInventory()?.ItemCount <= 0)
+                if (block.CustomName.StartsWith("store"))
+                    return false;
+                if (!block.IsWorking)
                     return false;
                 return true;
             });
+            // sourceContainers.ForEach(s => Echo($"dbg: Found src: '{s.CustomName}'"));
         }
 
         private List<IMyAssembler> allAssemblers = new List<IMyAssembler>();
         public void FindAllAssemblers()
         {
+            // Echo("dbg: FindAllAssemblers()");
             allAssemblers.Clear();
-            GridTerminalSystem.GetBlocksOfType<IMyAssembler>(allAssemblers, block => true);
+            GridTerminalSystem.GetBlocksOfType<IMyAssembler>(allAssemblers, block => block.IsWorking);
         }
 
-        private IMyAssembler? leadAssembler;
+        private IMyAssembler leadAssembler;
         public void FindLeadAssembler()
         {
+            // Echo("dbg: FindLeadAssembler()");
             tempAssemblers.Clear();
-            tempAssemblers = allAssemblers.Where(a => !a.CooperativeMode);
+            GridTerminalSystem.GetBlocksOfType<IMyAssembler>(tempAssemblers, a => a.IsWorking && !a.CooperativeMode);
             leadAssembler = tempAssemblers.Count() > 0 ? tempAssemblers[0] : null;
-            if (tempAssemblers.Count() > 1) {
-                Echo($"Warning: multiple non-cooperative assemblers found: {String.join(', ', tempAssemblers)}");
-            } else if (tempAssemblers.Count() == 0) {
-                Echo($"Warning: no non-cooperative assemblers found.");
+            if (tempAssemblers.Count() > 1)
+            {
+                Echo($"Warning: multiple non-cooperative assemblers found: {String.Join(", ", tempAssemblers)}");
             }
+            else if (tempAssemblers.Count() == 0)
+            {
+                Echo($"Warning: no non-cooperative assemblers found.");
+                return;
+            }
+            Echo($"Lead assembler is: {leadAssembler.CustomName}.");
         }
 
         private Dictionary<MyItemType, int> allAssemblerWork = new Dictionary<MyItemType, int>();
         public void UpdateAllAssemblerWork()
         {
-            allAssemblerWork.Clear();
+            // Echo("dbg: UpdateAllAssemblerWork()");
             tempQueueItems.Clear();
-            foreach (var a in allAssemblers) {
-                a.GetQueue(tempQueueItems);
-                // TODO: continue
-                // foreach (var
-                // ItemId
-            }
-        }
-
-        public Program()
-        {
-            // (called before Main)
-            FindSortedContainers();
-            FindSourceContainers();
-            UpdateKnownItems();
-            FindLeadAssembler();
-            UpdateAllAssemblerWork();
-
-            Runtime.UpdateFrequency = UpdateFrequency.Update100;
-        }
-
-        private Dictionary<string, MyItemType> namesToKnownItems = new Dictionary<string, MyItemType>(StringComparer.OrdinalIgnoreCase);
-        private HashSet<string> unknownNames = new HashSet<string>();
-        private Dictionary<MyItemType, int> allItemCounts = new Dictionary<MyItemType, int>();
-        public void UpdateKnownItems()
-        {
-            namesToKnownItems.Clear();
-            GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(tempBlocks, block => block.HasInventory);
-            foreach (var block in tempBlocks)
+            allAssemblerWork.Clear();
+            foreach (var a in allAssemblers)
             {
-                var inv = block.GetInventory();
-                if (inv == null)
-                    continue;
-                inv.GetItems(tempItems);
-                foreach (var i in tempItems)
+                a.GetQueue(tempQueueItems);
+                foreach (var qi in tempQueueItems)
                 {
-                    namesToKnownItems[i.Type.TypeId] = i.Type;
+                    var iType = LookupItemType(qi.BlueprintId.SubtypeName.Replace("Component", ""));
+                    if (!iType.HasValue)
+                    {
+                        Echo($"Warning: cannot lookup item type for assembler queue item: {qi.BlueprintId.TypeId.ToString()}/{qi.BlueprintId.SubtypeName}");
+                        continue;
+                    }
                     int count;
-                    if (allItemCounts.TryGetValue(i.Type, out count))
+                    if (allAssemblerWork.TryGetValue(iType.Value, out count))
+                        allAssemblerWork[iType.Value] += (int)qi.Amount;
+                    else
                     {
-                        allItemCounts[i.Type] += (int)i.Amount;
-                    } else
-                    {
-                        allItemCounts[i.Type] = (int)i.Amount;
+                        Echo($"dbg: found: {qi.BlueprintId.TypeId}/{qi.BlueprintId.SubtypeName}");
+                        allAssemblerWork[iType.Value] = (int)qi.Amount;
                     }
                 }
             }
         }
+
+
+        private Dictionary<string, MyItemType> namesToKnownItems = new Dictionary<string, MyItemType>(StringComparer.OrdinalIgnoreCase);
+        // private Dictionary<uint, MyItemType> typeIdToKnownItems = new Dictionary<uint, MyItemType>();
+        private HashSet<string> unknownNames = new HashSet<string>();
+        private Dictionary<MyItemType, int> allItemCounts = new Dictionary<MyItemType, int>();
+        public void UpdateKnownItems()
+        {
+            // Echo("dbg: UpdateKnownItems()");
+            namesToKnownItems.Clear();
+            allItemCounts.Clear();
+            // typeIdToKnownItems.Clear();
+            tempBlocks.Clear();
+            GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(tempBlocks, block => block.IsWorking && block.HasInventory);
+            foreach (var block in tempBlocks)
+            {
+                for (var invIdx = 0; invIdx < block.InventoryCount; invIdx++)
+                {
+                    var inv = block.GetInventory(invIdx);
+                    if (inv == null)
+                        continue;
+                    tempItems.Clear();
+                    inv.GetItems(tempItems);
+                    foreach (var i in tempItems)
+                    {
+                        namesToKnownItems[i.Type.SubtypeId] = i.Type;
+                        int count;
+                        if (allItemCounts.TryGetValue(i.Type, out count))
+                        {
+                            allItemCounts[i.Type] += (int)i.Amount;
+                        }
+                        else
+                        {
+                            // Echo($"Found new type: {i.Type.TypeId}/{i.Type.SubtypeId}");
+                            allItemCounts[i.Type] = (int)i.Amount;
+                        }
+                    }
+                }
+            }
+
+            foreach (var t in allItemCounts.Keys)
+            {
+                // Echo($"dbg: {t.SubtypeId}-{allItemCounts[t]}");
+                // TODO: display to terminal
+            }
+        }
         public MyItemType? LookupItemType(string name)
         {
-            name = name.ReplaceAll("_", " ")
+            name = name.Replace("_", "");
             MyItemType result;
             if (namesToKnownItems.TryGetValue(name, out result))
                 return result;
             if (unknownNames.Contains(name))
                 return null;
             // expensive lookup
-            var matchingKeys = namesToKnownItems.Keys.Where(n => n.Contains(name));
+            var matchingKeys = namesToKnownItems.Keys.Where(n => n.ToLower().Contains(name.ToLower()));
             if (matchingKeys.Count() > 0)
             {
-                if (matchingKeys) {
+                if (matchingKeys.Count() > 1)
+                {
                     // warn about ambiguity
-                    Echo($"Warning: '{name}' is ambiguous between: '{String.Join(', ', matchingKeys)}'.");
+                    Echo($"Warning: '{name}' is ambiguous between: '{String.Join(", ", matchingKeys)}'.");
                 }
 
                 // found
-                result = namesToKnownItems[matchingKey];
+                result = namesToKnownItems[matchingKeys.First()];
                 namesToKnownItems[name] = result;
                 return result;
             }
@@ -179,22 +186,50 @@ namespace IngameScript
             return null;
         }
 
+        public MyDefinitionId? FindBlueprint(MyItemType iType)
+        {
+            MyDefinitionId blueprint;
+            if (MyDefinitionId.TryParse($"MyObjectBuilder_BlueprintDefinition/{iType.SubtypeId}", out blueprint))
+            {
+                if (leadAssembler.CanUseBlueprint(blueprint))
+                {
+                    return blueprint;
+                }
+            }
+
+            if (MyDefinitionId.TryParse($"MyObjectBuilder_BlueprintDefinition/{iType.SubtypeId}Component", out blueprint))
+            {
+                if (leadAssembler.CanUseBlueprint(blueprint))
+                {
+                    return blueprint;
+                }
+            }
+
+            return null;
+        }
+
         private Dictionary<MyItemType, int> neededItemCounts = new Dictionary<MyItemType, int>();
         private List<string> itemNames = new List<string>();
         private List<int> itemDesiredCount = new List<int>();
         public void DoSort()
         {
+            // Echo("dbg: DoSort()");
             neededItemCounts.Clear();
 
             // pull into each container
             foreach (var dest in sortedContainers)
             {
+                //Echo($"dbg: sorting {dest.CustomName}");
                 var inv = dest.GetInventory();
                 if (inv == null)
+                {
+                    Echo($"Warning: Destination '{dest.CustomName}' doesn't have an inventory.");
                     continue;
+                }
 
                 // figure out what items we should be storing (by parsing the name)
                 var nameWords = dest.CustomName.Split().Skip(1/*"store"*/);
+                //Echo($"dbg: nameWords: {String.Join(" ", nameWords)}");
                 itemNames.Clear();
                 itemDesiredCount.Clear();
                 foreach (var word in nameWords)
@@ -204,7 +239,9 @@ namespace IngameScript
                     var parts = word.Split('-');
                     var name = parts[0];
                     var count = 0;
-                    int.TryParse(parts[1], out count);
+                    if (parts.Length == 2)
+                        int.TryParse(parts[1], out count);
+                    //Echo($"dbg: item name {name}-{count}");
                     itemNames.Add(name);
                     itemDesiredCount.Add(count);
                 }
@@ -217,139 +254,152 @@ namespace IngameScript
                     var name = itemNames[i];
                     var desiredCount = itemDesiredCount[i];
                     var specifiesDesiredCount = desiredCount > 0;
+                    // Echo($"dbg: we want {name}-{desiredCount}");
 
                     // figure out how many we already have
                     var iType = LookupItemType(name);
-                    if (iType != null) {
-                        Echo($"'{dest.CustomName}' wants invalid item '{name}'");
+                    if (!iType.HasValue)
+                    {
+                        Echo($"Warning: '{dest.CustomName}' wants invalid item '{name}'. All known names: {String.Join(",", namesToKnownItems.Keys)}");
                         continue;
                     }
-                    var currentCount = inv.GetItemAmount(iType);
+                    var currentCount = inv.GetItemAmount(iType.Value);
+                    // Echo($"dbg: we have {currentCount}");
+                    int currentGlobalCount = 0;
+                    allItemCounts.TryGetValue(iType.Value, out currentGlobalCount);
+                    var producingCount = 0;
+                    allAssemblerWork.TryGetValue(iType.Value, out producingCount);
                     var neededCount = desiredCount - currentCount;
                     // TODO: Actually, take all we can get always
                     // if (neededCount <= 0)
                     //    continue;
 
                     if (neededCount > 0)
-                        Echo($"'{dest.CustomName}' wants {specifiesDesiredCount ? neededCount : 'inf.'} more {iType.TypeId}");
+                    {
+                        Echo($"We want {desiredCount} {name} and we have {currentCount} locally and {currentGlobalCount - currentCount} more globally and we are making {producingCount}.");
+                        // Echo($"'{dest.CustomName}' wants {(specifiesDesiredCount ? neededCount.ToString() : "inf.")} more {iType.Value.SubtypeId}");
+                    }
                     else {/* taking all anyway */}
 
                     // search the grid
                     foreach (var src in sourceContainers)
                     {
-                        var srcInv = src.GetInventory(0);
-                        if (srcInv == null)
-                            continue;
+                        // for each inventory
+                        for (var invIdx = 0; invIdx < src.InventoryCount; invIdx++)
+                        {
+                            var srcInv = src.GetInventory(invIdx);
+                            if (srcInv == null)
+                                continue;
 
-                        // see how many we have
-                        var srcCount = srcInv.GetItemAmount(iType);
-                        if (srcCount <= 0)
-                            continue;
+                            // see how many we have
+                            var srcCount = srcInv.GetItemAmount(iType.Value);
+                            if (srcCount <= 0)
+                                continue;
 
-                        var transferAmount = srcCount; // Math.min(srcCount, neededCount);
-                        var trasnferSuccess = srcInv.TransferItemTo(inv, iType, transferAmount);
-                        if (trasnferSuccess) {
-                            Echo($"Transferred {transferAmount} {name} from '{src.CustomName}' to '{dest.CustomName}'");
-                            neededCount -= transferAmount;
-                        } else {
-                            // TODO: log transfer success / fail ? Probably too noisy.
+                            // Echo($"dbg: {src.CustomName} has {srcCount}");
+
+                            // transfer each occurrance
+                            tempItems.Clear();
+                            srcInv.GetItems(tempItems, item => item.Type.SubtypeId == iType.Value.SubtypeId);
+                            foreach (var invI in tempItems)
+                            {
+                                var trasnferSuccess = srcInv.TransferItemTo(inv, invI, invI.Amount);
+                                if (trasnferSuccess)
+                                {
+                                    Echo($"Transferred {invI.Amount} {name} from '{src.CustomName}'");
+                                    neededCount -= invI.Amount;
+                                }
+                                else
+                                {
+                                    Echo($"dbg: Transferring {invI.Amount} {name} from '{src.CustomName}' to '{dest.CustomName} failed.");
+                                    break;
+                                    // TODO: log transfer success / fail ? Probably too noisy.
+                                }
+                            }
                         }
                     }
 
                     // update the counts of what we need
-                    if (neededCount > 0) {
+                    if (neededCount > 0)
+                    {
+                        //Echo($"dbg: we didn't get enough {name}; we need {neededCount} more");
                         int prevNeededCount;
-                        if (neededItemCounts.TryGetValue(i.Type, out prevNeededCount))
-                            neededItemCounts[i.Type] += neededCount;
+                        if (neededItemCounts.TryGetValue(iType.Value, out prevNeededCount))
+                            neededItemCounts[iType.Value] += (int)neededCount;
                         else
-                            neededItemCounts[i.Type] = neededCount;
+                            neededItemCounts[iType.Value] = (int)neededCount;
                     }
                 }
             }
 
             // put items we still need into production
-            UpdateAllAssemblerWork();
-            if (leadAssembler != null) {
-                foreach (var typeAndCount in neededItemCounts.GetKeyValuePairs()) {
+            // UpdateAllAssemblerWork(); // see how many we are already producing
+            if (leadAssembler != null)
+            {
+                foreach (var typeAndCount in neededItemCounts)
+                {
                     var iType = typeAndCount.Key;
-                    var neededCount = typeAndCount.Value;
-                    if (neededCount <= 0)
+                    var wantedCount = typeAndCount.Value;
+                    if (wantedCount <= 0)
                         continue;
+                    // Echo($"dbg: We want {wantedCount} more {iType.SubtypeId}");
 
-                    // see how many we are already producing
-                    foreach (var assembler in allAssemblers) {
+                    // compare to what we are producing currently
+                    var producingCount = 0;
+                    allAssemblerWork.TryGetValue(iType, out producingCount);
+                    var neededCount = wantedCount - producingCount;
+                    // Echo($"dbg: We need {neededCount} more {iType.SubtypeId}");
+                    if (neededCount <= 0)
+                    {
+                        // Echo($"We are already trying to produce {producingCount}.");
+                        continue;
+                    } else
+                    {
+                        // Echo($"dbg: We are producing any.");
+                    }
+
+                    // enqueue
+                    MyDefinitionId? blueprintOpt = FindBlueprint(iType);
+                    if (!blueprintOpt.HasValue)
+                    {
+                        Echo($"Warning: Failed to find definition for {iType.SubtypeId}");
+                        continue;
+                    }
+                    MyDefinitionId blueprint = blueprintOpt.Value;
+
+                    try
+                    {
+                        leadAssembler.AddQueueItem(blueprint, (MyFixedPoint)neededCount);
+                        if (allAssemblerWork.ContainsKey(iType))
+                            allAssemblerWork[iType] += neededCount;
+                        else
+                            allAssemblerWork[iType] = neededCount;
+                        Echo($"Enqueued {wantedCount} more {blueprint.SubtypeName}");
+                    } catch (Exception e)
+                    {
+                        Echo($"Warning: Lead assembler failed to produce {blueprint.TypeId}/{blueprint.SubtypeName}");
                     }
                 }
             }
         }
 
-        // private List<MyInventoryItem> itemList = new List<MyInventoryItem>();
-        // public void FetchComponent(string name, int maxAmount)
-        // {
-        //     foreach (var remoteContainer in sourceContainers)
-        //     {
-        //         var inv = remoteContainer.GetInventory(0);
-        //         itemList.Clear();
-        //         inv.GetItems(itemList, item => item.Type.SubtypeId == name);
-        //         if (itemList.Count > 0)
-        //         {
-        //             var amount = Math.Min(maxAmount, (int)itemList[0].Amount);
-        //             Echo($"transferring {amount} {name} from {remoteContainer.CustomName}");
-        //             inv.TransferItemTo(destContainer.GetInventory(0), itemList[0], amount);
-        //             break;
-        //         }
-        //     }
-        //     Echo("couldn't find anywhere");
-        // }
+        // Super Sorter Out 1
+
+        public Program() // called before Main
+        {
+            Runtime.UpdateFrequency = UpdateFrequency.Update100;
+        }
 
         public void Main(string argument, UpdateType updateSource)
         {
-            DoSort();
-            // Dictionary<string, int> desiredCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            // desiredCounts["SteelPlate"] = 10000;
-            // desiredCounts["Motor"] = 1000;
-            // desiredCounts["InteriorPlate"] = 10000;
-            // desiredCounts["ThrusterComponent"] = 1000;
-            // desiredCounts["Computer"] = 1000;
-            // desiredCounts["ConstructionComponent"] = 10000;
-            // desiredCounts["GirderComponent"] = 1000;
-            // desiredCounts["MetalGrid"] = 10000;
-            // desiredCounts["SmallTube"] = 10000;
-            // desiredCounts["LargeTube"] = 1000;
-            // desiredCounts["Display"] = 1000;
-            // desiredCounts["BulletproofGlass"] = 1000;
-            // desiredCounts["ReactorComponent"] = 1000;
-            // desiredCounts["PowerCell"] = 1000;
-            // desiredCounts["RadioCommunicationComponent"] = 1000;
-            // desiredCounts["GravityGeneratorComponent"] = 0;
-            // desiredCounts["MedicalComponent"] = 0;
-            // desiredCounts["SolarCell"] = 0;
-            // desiredCounts["Superconductor"] = 0;
-            // desiredCounts["Canvas"] = 0;
+            FindSortedContainers();
+            FindSourceContainers();
+            UpdateKnownItems();
+            FindAllAssemblers();
+            UpdateAllAssemblerWork();
+            FindLeadAssembler();
 
-            // List<MyInventoryItem> containerContents = new List<MyInventoryItem>();
-            // destContainer.GetInventory(0).GetItems(containerContents, item => true);
-            // foreach (KeyValuePair<string, int> entry in desiredCounts)
-            // {
-            //     // see how many of this item we have
-            //     List<MyInventoryItem> itemList = new List<MyInventoryItem>();
-            //     destContainer.GetInventory(0).GetItems(itemList, item => item.Type.SubtypeId == entry.Key);
-            //     int maxAmount = 0;
-            //     foreach (MyInventoryItem i in itemList)
-            //     {
-            //         maxAmount += (int)i.Amount;
-            //     }
-            //     Echo(entry.Key);
-            //     if (maxAmount < entry.Value)
-            //     {
-            //         Echo("needed");
-            //         FetchComponent(entry.Key, entry.Value - maxAmount);
-            //     }
-            //     else
-            //     {
-            //         Echo("not needed");
-            //     }
-            // }
+            DoSort();
         }
     }
 }
